@@ -1,1 +1,1 @@
-{"lora_path": "/mnt/SharedExt/loras/Lora", "output_path": "/media/pacogarat/Shared/stable-diffusion/models/Lora", "thumbnail_size": 150, "sidebar_visible": true, "selected_lora_subfolder": "", "civitai_api_key": "8712abedc4865cd5b0061d13590c021f"}
+{"lora_path": "/mnt/SharedExt/models/StableDiffusion", "output_path": "/media/pacogarat/Shared/stable-diffusion/models/Lora", "thumbnail_size": 150, "sidebar_visible": false, "selected_lora_subfolder": "", "civitai_api_key": "8712abedc4865cd5b0061d13590c021f"}

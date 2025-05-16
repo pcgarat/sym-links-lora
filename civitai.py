@@ -77,6 +77,11 @@ class CivitaiAPI:
                 # Descargar todo excepto el .safetensors
                 if ext != ".safetensors":
                     dest_path = os.path.join(dest_folder, file_name)
+                    # Si es .gguf y ya existe, NO descargar
+                    if ext == ".gguf" and os.path.exists(dest_path):
+                        if self.log_func:
+                            self.log_func(f"Archivo GGUF ya existe, no se descarga: {file_name}")
+                        continue
                     need_download = True
                     if os.path.exists(dest_path):
                         # Si ya existe, no lo contamos
@@ -87,19 +92,29 @@ class CivitaiAPI:
                         self._download_file(file_url, dest_path)
                         if self._preview_callback and ext in [".png", ".jpg", ".jpeg", ".webp"]:
                             self._preview_callback()
-        # Descargar imágenes de preview
+        # Descargar imágenes de preview y renombrarlas
+        # Si hay un safetensor o gguf, usar ese nombre base
+        base_preview = None
+        if safetensor_path:
+            base_preview = os.path.splitext(safetensor_path)[0]
+        else:
+            # Buscar un gguf en la carpeta
+            for f in os.listdir(dest_folder):
+                if f.lower().endswith('.gguf'):
+                    base_preview = os.path.splitext(os.path.join(dest_folder, f))[0]
+                    break
         for img in model_info.get("images", []):
             img_url = img.get("url")
-            if img_url:
+            if img_url and base_preview:
                 ext = os.path.splitext(img_url)[1]
-                img_name = f"{model_info.get('name', 'preview')}.preview{ext}"
-                dest_path = os.path.join(dest_folder, img_name)
+                preview_name = base_preview + f".preview{ext}"
+                dest_path = preview_name
                 need_download = True
                 if os.path.exists(dest_path):
                     need_download = False
                 if need_download:
                     if self.log_func:
-                        self.log_func(f"Descargando imagen de preview: {img_name} → {dest_path}")
+                        self.log_func(f"Descargando imagen de preview: {os.path.basename(dest_path)} → {dest_path}")
                     self._download_file(img_url, dest_path)
                     if self._preview_callback:
                         self._preview_callback()

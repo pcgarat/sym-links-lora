@@ -517,14 +517,26 @@ class LoraManager(QMainWindow):
         # Create name label
         name_label = QLabel(preview_name)
         name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_label.setStyleSheet("""
-            QLabel {
-                color: #ffffff;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 5px;
-            }
-        """)
+        # --- NUEVO: Azul si existe JSON ---
+        lora_json = os.path.splitext(lora_path)[0] + ".json"
+        if os.path.exists(lora_json):
+            name_label.setStyleSheet("""
+                QLabel {
+                    color: #2196f3;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 5px;
+                }
+            """)
+        else:
+            name_label.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 5px;
+                }
+            """)
         name_label.setCursor(Qt.CursorShape.PointingHandCursor)
         image_layout.addWidget(name_label)
         
