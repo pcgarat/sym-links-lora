@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                             QScrollArea, QGridLayout, QCheckBox, QLineEdit,
                             QGroupBox, QListWidget, QListWidgetItem, QStackedLayout)
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QColor, QPainter
 from PIL import Image
 import math
@@ -203,8 +203,8 @@ class LoraManager(QMainWindow):
         self.all_thumbnail_widgets = {}
         
         # Load LORAs and refresh selected list
-        self.load_loras()
-        self.refresh_selected_list()
+        QTimer.singleShot(0, self.load_loras)
+        QTimer.singleShot(0, self.refresh_selected_list)
     
     def refresh_selected_list(self):
         """Refresh the list of selected LORAs"""
