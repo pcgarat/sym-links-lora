@@ -172,6 +172,7 @@ class LoraManager(QMainWindow):
         available_layout = QVBoxLayout()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.thumbnail_widget = QWidget()
         self.thumbnail_layout = QGridLayout(self.thumbnail_widget)
         self.thumbnail_layout.setSpacing(20)
