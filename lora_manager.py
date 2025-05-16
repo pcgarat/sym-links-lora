@@ -238,7 +238,10 @@ class LoraManager(QMainWindow):
         # Add thumbnails for each LORA
         row = 0
         col = 0
-        container_width = self.selected_widget.width() or self.width()
+        container_width = self.selected_widget.width()
+        if container_width < self.thumbnail_size + 24:
+            parent = self.selected_widget.parent()
+            container_width = parent.width() if parent else self.width()
         max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))
         self.selected_applied_loras.clear()  # Limpiar selección al refrescar panel de abajo
         for lora_name, files in lora_files.items():
@@ -520,7 +523,10 @@ class LoraManager(QMainWindow):
         # Walk through the LORA directory
         row = 0
         col = 0
-        container_width = self.thumbnail_widget.width() or self.width()
+        container_width = self.thumbnail_widget.width()
+        if container_width < self.thumbnail_size + 24:
+            parent = self.thumbnail_widget.parent()
+            container_width = parent.width() if parent else self.width()
         max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))  # Solo columnas completas
         
         for root, dirs, files in os.walk(self.lora_path):
@@ -586,7 +592,10 @@ class LoraManager(QMainWindow):
         # Filter and display thumbnails
         row = 0
         col = 0
-        container_width = self.thumbnail_widget.width() or self.width()
+        container_width = self.thumbnail_widget.width()
+        if container_width < self.thumbnail_size + 24:
+            parent = self.thumbnail_widget.parent()
+            container_width = parent.width() if parent else self.width()
         max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))
         
         for search_key, widget in self.all_thumbnail_widgets.items():
