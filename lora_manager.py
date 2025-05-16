@@ -103,40 +103,50 @@ class LoraManager(QMainWindow):
         # Create main widget and layout
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
-        layout = QVBoxLayout(main_widget)
-        layout.setSpacing(15)  # Add spacing between sections
-        layout.setContentsMargins(20, 20, 20, 20)  # Add margins around the layout
+        self.main_hbox = QHBoxLayout()
+        self.main_hbox.setContentsMargins(0, 0, 0, 0)
+        self.main_hbox.setSpacing(0)
         
-        # Path selection
-        path_group = QGroupBox("Paths")
-        path_layout = QHBoxLayout()
-        path_layout.setSpacing(10)
-        
+        # --- NUEVO: Panel lateral izquierdo ---
+        self.sidebar = QWidget()
+        self.sidebar_layout = QVBoxLayout(self.sidebar)
+        self.sidebar_layout.setSpacing(15)
+        self.sidebar_layout.setContentsMargins(10, 10, 10, 10)
+        # Controles de directorios y zoom en el sidebar
         self.lora_path_label = QLabel(f"LORA Path: {self.lora_path}")
         self.output_path_label = QLabel(f"Output Path: {self.output_path}")
-        
         self.lora_path_btn = QPushButton("Change LORA Path")
         self.output_path_btn = QPushButton("Change Output Path")
-        
-        # Zoom controls
         self.zoom_out_btn = QPushButton("Zoom -")
         self.zoom_in_btn = QPushButton("Zoom +")
-        self.zoom_out_btn.clicked.connect(self.zoom_out)
-        self.zoom_in_btn.clicked.connect(self.zoom_in)
-        
         self.lora_path_btn.clicked.connect(self.change_lora_path)
         self.output_path_btn.clicked.connect(self.change_output_path)
-        
-        path_layout.addWidget(self.lora_path_label)
-        path_layout.addWidget(self.lora_path_btn)
-        path_layout.addWidget(self.output_path_label)
-        path_layout.addWidget(self.output_path_btn)
-        path_layout.addWidget(self.zoom_out_btn)
-        path_layout.addWidget(self.zoom_in_btn)
-        
-        path_group.setLayout(path_layout)
-        layout.addWidget(path_group)
-        
+        self.zoom_out_btn.clicked.connect(self.zoom_out)
+        self.zoom_in_btn.clicked.connect(self.zoom_in)
+        self.sidebar_layout.addWidget(self.lora_path_label)
+        self.sidebar_layout.addWidget(self.lora_path_btn)
+        self.sidebar_layout.addWidget(self.output_path_label)
+        self.sidebar_layout.addWidget(self.output_path_btn)
+        self.sidebar_layout.addWidget(self.zoom_out_btn)
+        self.sidebar_layout.addWidget(self.zoom_in_btn)
+        self.sidebar_layout.addStretch(1)
+        # Botón para mostrar/ocultar el sidebar
+        self.toggle_sidebar_btn = QPushButton("☰")
+        self.toggle_sidebar_btn.setFixedWidth(32)
+        self.toggle_sidebar_btn.setStyleSheet("font-size: 18px; font-weight: bold; background: #222; color: #fff; border-radius: 6px;")
+        self.toggle_sidebar_btn.clicked.connect(self.toggle_sidebar)
+        # --- FIN NUEVO ---
+        # --- NUEVO: Layout principal horizontal ---
+        self.sidebar_container = QVBoxLayout()
+        self.sidebar_container.setContentsMargins(0, 0, 0, 0)
+        self.sidebar_container.setSpacing(0)
+        self.sidebar_container.addWidget(self.toggle_sidebar_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.sidebar_container.addWidget(self.sidebar)
+        self.main_hbox.addLayout(self.sidebar_container)
+        # Widget central para el resto de la UI
+        self.central_vbox = QVBoxLayout()
+        self.central_vbox.setSpacing(15)
+        self.central_vbox.setContentsMargins(20, 20, 20, 20)
         # Search box
         search_group = QGroupBox("Search")
         search_layout = QHBoxLayout()
@@ -147,55 +157,51 @@ class LoraManager(QMainWindow):
         search_layout.addWidget(self.search_label)
         search_layout.addWidget(self.search_box)
         search_group.setLayout(search_layout)
-        layout.addWidget(search_group)
-        
+        self.central_vbox.addWidget(search_group)
         # Available LORAs section
         available_group = QGroupBox("Available LORAs")
         available_layout = QVBoxLayout()
-        
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.thumbnail_widget = QWidget()
         self.thumbnail_layout = QGridLayout(self.thumbnail_widget)
-        self.thumbnail_layout.setSpacing(20)  # Add spacing between thumbnails
+        self.thumbnail_layout.setSpacing(20)
         scroll.setWidget(self.thumbnail_widget)
         available_layout.addWidget(scroll)
-        
         available_group.setLayout(available_layout)
-        layout.addWidget(available_group)
-        
+        self.central_vbox.addWidget(available_group)
         # Apply button
         self.apply_btn = QPushButton("Apply Selection")
         self.apply_btn.clicked.connect(self.apply_selection)
-        layout.addWidget(self.apply_btn)
-        
+        self.central_vbox.addWidget(self.apply_btn)
         # Selected LORAs section
         selected_group = QGroupBox("Selected LORAs")
         selected_layout = QVBoxLayout()
-        
         selected_scroll = QScrollArea()
         selected_scroll.setWidgetResizable(True)
         self.selected_widget = QWidget()
         self.selected_layout = QGridLayout(self.selected_widget)
-        self.selected_layout.setSpacing(20)  # Add spacing between thumbnails
+        self.selected_layout.setSpacing(20)
         selected_scroll.setWidget(self.selected_widget)
         selected_layout.addWidget(selected_scroll)
-        
         # Buttons for managing selected LORAs
         buttons_layout = QHBoxLayout()
         buttons_layout.setSpacing(10)
         self.remove_all_btn = QPushButton("Remove All")
         self.refresh_btn = QPushButton("Refresh List")
-        
         self.remove_all_btn.clicked.connect(self.remove_selected_or_all_loras)
         self.refresh_btn.clicked.connect(self.refresh_selected_list)
-        
         buttons_layout.addWidget(self.remove_all_btn)
         buttons_layout.addWidget(self.refresh_btn)
         selected_layout.addLayout(buttons_layout)
-        
         selected_group.setLayout(selected_layout)
-        layout.addWidget(selected_group)
+        self.central_vbox.addWidget(selected_group)
+        # Añadir el central_vbox al main_hbox
+        self.main_hbox.addLayout(self.central_vbox)
+        # Establecer el layout principal
+        main_widget.setLayout(self.main_hbox)
+        # Sidebar visible por defecto
+        self.sidebar.setVisible(True)
         
         # Dictionary to store selected LORAs
         self.selected_applied_loras = set()
@@ -692,6 +698,9 @@ class LoraManager(QMainWindow):
         super().resizeEvent(event)
         self.load_loras()
         self.refresh_selected_list()
+
+    def toggle_sidebar(self):
+        self.sidebar.setVisible(not self.sidebar.isVisible())
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
