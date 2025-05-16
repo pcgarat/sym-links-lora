@@ -1,14 +1,17 @@
 import os
 import sys
 import json
+import shutil
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                             QScrollArea, QGridLayout, QCheckBox, QLineEdit,
-                            QGroupBox, QListWidget, QListWidgetItem)
+                            QGroupBox, QListWidget, QListWidgetItem, QStackedLayout)
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QColor, QPainter
 from PIL import Image
+import math
+from io import BytesIO
 
 class LoraManager(QMainWindow):
     def __init__(self):
@@ -184,7 +187,7 @@ class LoraManager(QMainWindow):
         self.remove_all_btn = QPushButton("Remove All")
         self.refresh_btn = QPushButton("Refresh List")
         
-        self.remove_all_btn.clicked.connect(self.remove_all_loras)
+        self.remove_all_btn.clicked.connect(self.remove_selected_or_all_loras)
         self.refresh_btn.clicked.connect(self.refresh_selected_list)
         
         buttons_layout.addWidget(self.remove_all_btn)
@@ -195,7 +198,7 @@ class LoraManager(QMainWindow):
         layout.addWidget(selected_group)
         
         # Dictionary to store selected LORAs
-        self.selected_loras = {}
+        self.selected_applied_loras = set()
         # Dictionary to store all LORA widgets
         self.all_thumbnail_widgets = {}
         
@@ -208,44 +211,40 @@ class LoraManager(QMainWindow):
         # Clear existing thumbnails
         for i in reversed(range(self.selected_layout.count())): 
             self.selected_layout.itemAt(i).widget().setParent(None)
-        
         if not os.path.exists(self.output_path):
             return
-            
         # Group files by LORA
         lora_files = {}
         for file in os.listdir(self.output_path):
             file_path = os.path.join(self.output_path, file)
-            if os.path.islink(file_path):
-                target_path = os.readlink(file_path)
-                if target_path.lower().endswith('.safetensors'):
-                    lora_name = os.path.splitext(file)[0]
-                    lora_dir = os.path.dirname(target_path)
-                    if lora_name not in lora_files:
-                        lora_files[lora_name] = {
-                            'model': target_path,
-                            'preview': None,
-                            'config': None
-                        }
-                elif target_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    lora_name = os.path.splitext(file)[0]
-                    if lora_name in lora_files:
-                        lora_files[lora_name]['preview'] = target_path
-                elif target_path.lower().endswith(('.yaml', '.yml', '.json')):
-                    lora_name = os.path.splitext(file)[0]
-                    if lora_name in lora_files:
-                        lora_files[lora_name]['config'] = target_path
-        
+            # Ahora simplemente agrupa por nombre base, ya que son archivos copiados
+            if file.lower().endswith('.safetensors'):
+                lora_name = os.path.splitext(file)[0]
+                lora_dir = self.output_path
+                if lora_name not in lora_files:
+                    lora_files[lora_name] = {
+                        'model': file_path,
+                        'preview': None,
+                        'config': None
+                    }
+            elif file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                lora_name = os.path.splitext(file)[0].replace('.preview', '')
+                if lora_name in lora_files:
+                    lora_files[lora_name]['preview'] = file_path
+            elif file.lower().endswith(('.yaml', '.yml', '.json')):
+                lora_name = os.path.splitext(file)[0]
+                if lora_name in lora_files:
+                    lora_files[lora_name]['config'] = file_path
         # Add thumbnails for each LORA
         row = 0
         col = 0
-        max_cols = 4
-        
+        container_width = self.selected_widget.width() or self.width()
+        max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))
+        self.selected_applied_loras.clear()  # Limpiar selección al refrescar panel de abajo
         for lora_name, files in lora_files.items():
             # Try to find preview image in the original directory
             lora_dir = os.path.dirname(files['model'])
             preview_path = None
-            
             # First try with .preview extension
             preview_base = f"{lora_name}.preview"
             for ext in ['.png', '.jpg', '.jpeg']:
@@ -253,7 +252,6 @@ class LoraManager(QMainWindow):
                 if os.path.exists(test_path):
                     preview_path = test_path
                     break
-            
             # If not found, try with just the LORA name
             if preview_path is None:
                 for ext in ['.png', '.jpg', '.jpeg']:
@@ -261,32 +259,42 @@ class LoraManager(QMainWindow):
                     if os.path.exists(test_path):
                         preview_path = test_path
                         break
-            
             # If still not found, use default
             if preview_path is None:
                 preview_path = os.path.join(lora_dir, f"{lora_name}.preview.png")
                 if not os.path.exists(preview_path):
                     preview_path = os.path.join(lora_dir, "preview.png")
-            
             thumbnail_widget = self.create_thumbnail_widget(files['model'], lora_name, preview_path, is_applied=True)
             self.selected_layout.addWidget(thumbnail_widget, row, col)
-            
             col += 1
             if col >= max_cols:
                 col = 0
                 row += 1
+        self.update_remove_all_btn_text()
     
-    def remove_all_loras(self):
-        """Remove all LORAs from the list"""
-        for file in os.listdir(self.output_path):
-            file_path = os.path.join(self.output_path, file)
-            if os.path.islink(file_path):
+    def update_remove_all_btn_text(self):
+        if self.selected_applied_loras:
+            self.remove_all_btn.setText("Remove Selected")
+        else:
+            self.remove_all_btn.setText("Remove All")
+    
+    def remove_selected_or_all_loras(self):
+        if self.selected_applied_loras:
+            # Eliminar solo los seleccionados
+            for lora_path in list(self.selected_applied_loras):
+                self.remove_lora(lora_path)
+            self.selected_applied_loras.clear()
+        else:
+            # Eliminar todos
+            for file in os.listdir(self.output_path):
+                file_path = os.path.join(self.output_path, file)
                 try:
-                    os.unlink(file_path)
+                    os.remove(file_path)
                 except OSError as e:
                     print(f"Error removing {file_path}: {e}")
-        
         self.refresh_selected_list()
+        self.selected_applied_loras.clear()
+        self.load_loras()
     
     def load_settings(self):
         try:
@@ -294,14 +302,17 @@ class LoraManager(QMainWindow):
                 settings = json.load(f)
                 self.lora_path = settings.get('lora_path', self.default_lora_path)
                 self.output_path = settings.get('output_path', self.default_output_path)
+                self.thumbnail_size = settings.get('thumbnail_size', 250)
         except FileNotFoundError:
             self.lora_path = self.default_lora_path
             self.output_path = self.default_output_path
+            self.thumbnail_size = 250
     
     def save_settings(self):
         settings = {
             'lora_path': self.lora_path,
-            'output_path': self.output_path
+            'output_path': self.output_path,
+            'thumbnail_size': self.thumbnail_size
         }
         with open(self.settings_file, 'w') as f:
             json.dump(settings, f)
@@ -393,9 +404,11 @@ class LoraManager(QMainWindow):
         try:
             if os.path.exists(preview_path):
                 img = Image.open(preview_path)
-                img.thumbnail((self.thumbnail_size, self.thumbnail_size))  # Usar tamaño dinámico
-                img_qt = QImage(img.tobytes(), img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
-                pixmap = QPixmap.fromImage(img_qt)
+                img.thumbnail((self.thumbnail_size, self.thumbnail_size))
+                buffer = BytesIO()
+                img.save(buffer, format="PNG")
+                pixmap = QPixmap()
+                pixmap.loadFromData(buffer.getvalue(), "PNG")
             else:
                 raise FileNotFoundError
         except Exception:
@@ -438,42 +451,60 @@ class LoraManager(QMainWindow):
                         }
                     """)
             def handle_click(event):
-                current_state = self.selected_loras.get(lora_path, False)
+                current_state = lora_path in self.selected_applied_loras
                 new_state = not current_state
                 if new_state:
-                    self.selected_loras[lora_path] = True
+                    self.selected_applied_loras.add(lora_path)
                 else:
-                    self.selected_loras.pop(lora_path, None)
+                    self.selected_applied_loras.discard(lora_path)
                 update_selection(new_state)
-            # Connect click events to all clickable elements
+                self.update_remove_all_btn_text()
             image_container.mousePressEvent = handle_click
             img_label.mousePressEvent = handle_click
             name_label.mousePressEvent = handle_click
             if rel_path != ".":
                 path_label.mousePressEvent = handle_click
-            # Estado visual inicial
-            update_selection(self.selected_loras.get(lora_path, False))
+            update_selection(lora_path in self.selected_applied_loras)
         else:
-            # Add remove button for applied LORAs
-            remove_btn = QPushButton("Remove")
-            remove_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #b71c1c;
-                    color: white;
-                    border: none;
-                    padding: 8px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: #c62828;
-                }
-                QPushButton:pressed {
-                    background-color: #d32f2f;
-                }
-            """)
-            remove_btn.clicked.connect(lambda checked, path=lora_path: self.remove_lora(path))
-            thumbnail_layout.addWidget(remove_btn)
+            # Panel de abajo: selección múltiple por click, sin botón X
+            def update_selection(selected):
+                if selected:
+                    image_container.setStyleSheet("""
+                        QWidget {
+                            background-color: #1b5e20;
+                            border: 1px solid #2e7d32;
+                            border-radius: 5px;
+                        }
+                        QWidget:hover {
+                            background-color: #2e7d32;
+                        }
+                    """)
+                else:
+                    image_container.setStyleSheet("""
+                        QWidget {
+                            background-color: #2d2d2d;
+                            border: 1px solid #3d3d3d;
+                            border-radius: 5px;
+                        }
+                        QWidget:hover {
+                            background-color: #353535;
+                        }
+                    """)
+            def handle_click(event):
+                current_state = lora_path in self.selected_applied_loras
+                new_state = not current_state
+                if new_state:
+                    self.selected_applied_loras.add(lora_path)
+                else:
+                    self.selected_applied_loras.discard(lora_path)
+                update_selection(new_state)
+                self.update_remove_all_btn_text()
+            image_container.mousePressEvent = handle_click
+            img_label.mousePressEvent = handle_click
+            name_label.mousePressEvent = handle_click
+            if rel_path != ".":
+                path_label.mousePressEvent = handle_click
+            update_selection(lora_path in self.selected_applied_loras)
         
         return thumbnail_widget
     
@@ -481,8 +512,6 @@ class LoraManager(QMainWindow):
         # Clear existing thumbnails
         for i in reversed(range(self.thumbnail_layout.count())): 
             self.thumbnail_layout.itemAt(i).widget().setParent(None)
-        
-        self.selected_loras.clear()
         self.all_thumbnail_widgets.clear()
         
         # Create output directory if it doesn't exist
@@ -492,7 +521,7 @@ class LoraManager(QMainWindow):
         row = 0
         col = 0
         container_width = self.thumbnail_widget.width() or self.width()
-        max_cols = max(1, container_width // (self.thumbnail_size + 24))  # 24 es margen/espaciado
+        max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))  # Solo columnas completas
         
         for root, dirs, files in os.walk(self.lora_path):
             # Find all .safetensors files
@@ -558,7 +587,7 @@ class LoraManager(QMainWindow):
         row = 0
         col = 0
         container_width = self.thumbnail_widget.width() or self.width()
-        max_cols = max(1, container_width // (self.thumbnail_size + 24))
+        max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))
         
         for search_key, widget in self.all_thumbnail_widgets.items():
             if search_text in search_key:
@@ -570,7 +599,7 @@ class LoraManager(QMainWindow):
     
     def apply_selection(self):
         # Create symbolic links for selected LORAs
-        for lora_path in self.selected_loras:
+        for lora_path in self.selected_applied_loras:
             lora_dir = os.path.dirname(lora_path)
             lora_name = os.path.splitext(os.path.basename(lora_path))[0]
             # Get all associated files
@@ -597,45 +626,63 @@ class LoraManager(QMainWindow):
                     continue
                 else:
                     print(f"[DEBUG] File exists and will be linked: {file_path}")
-                    # Check permissions
-                    if not os.access(file_path, os.R_OK):
-                        print(f"[DEBUG] Warning: No read permission for {file_path}")
+                    print(f"[DEBUG] Fuente: {file_path}")
+                    print(f"    - exists: {os.path.exists(file_path)}")
+                    print(f"    - isfile: {os.path.isfile(file_path)}")
+                    try:
+                        stat = os.stat(file_path)
+                        print(f"    - size: {stat.st_size} bytes")
+                        print(f"    - permissions: {oct(stat.st_mode)}")
+                    except Exception as e:
+                        print(f"    - stat error: {e}")
+                    print(f"[DEBUG] Destino: {target_path}")
+                    print(f"    - exists: {os.path.exists(target_path)}")
+                    print(f"    - islink: {os.path.islink(target_path)}")
+                    print(f"    - dirname exists: {os.path.exists(os.path.dirname(target_path))}")
                 try:
                     os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    os.symlink(file_path, target_path)
-                except OSError as e:
-                    print(f"Error creating symbolic link for {file}: {e}")
+                    shutil.copy2(file_path, target_path)
+                    print(f"[DEBUG] Copied file: {file_path} -> {target_path}")
+                except Exception as e:
+                    import traceback
+                    print(f"[DEBUG] Exception copying file for {file}: {e}")
+                    traceback.print_exc()
         # Refresh the selected list
         self.refresh_selected_list()
+        self.selected_applied_loras.clear()
+        self.load_loras()
     
     def remove_lora(self, lora_path):
-        """Remove all symbolic links for a specific LORA"""
+        """Remove all files for a specific LORA from the output directory"""
         lora_name = os.path.splitext(os.path.basename(lora_path))[0]
         for file in os.listdir(self.output_path):
             file_path = os.path.join(self.output_path, file)
-            if os.path.islink(file_path):
-                target_path = os.readlink(file_path)
-                file_base = os.path.splitext(file)[0]
-                if file_base == lora_name or file.startswith(f"{lora_name}.preview"):
-                    try:
-                        os.unlink(file_path)
-                    except OSError as e:
-                        print(f"Error removing {file_path}: {e}")
+            file_base = os.path.splitext(file)[0]
+            if file_base == lora_name or file.startswith(f"{lora_name}.preview"):
+                try:
+                    os.remove(file_path)
+                except OSError as e:
+                    print(f"Error removing {file_path}: {e}")
         self.refresh_selected_list()
     
     def zoom_in(self):
         if self.thumbnail_size < 500:
             self.thumbnail_size += 50
             self.load_loras()
+            self.refresh_selected_list()
+            self.save_settings()
     
     def zoom_out(self):
         if self.thumbnail_size > 100:
             self.thumbnail_size -= 50
             self.load_loras()
+            self.refresh_selected_list()
+            self.save_settings()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.load_loras()
+        self.refresh_selected_list()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

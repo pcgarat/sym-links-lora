@@ -23,10 +23,6 @@ if ! command -v pip3 &> /dev/null; then
     exit 1
 fi
 
-# Instalar dependencias del sistema para Qt
-print_message "Instalando dependencias del sistema para Qt..."
-sudo apt-get update
-sudo apt-get install -y python3-venv qt6-base-dev libqt6gui6 libqt6widgets6 libqt6core6 libqt6svg6
 
 # Crear entorno virtual si no existe
 if [ ! -d "$VENV_NAME" ]; then
