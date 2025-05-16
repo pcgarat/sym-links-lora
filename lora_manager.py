@@ -8,11 +8,12 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QScrollArea, QGridLayout, QCheckBox, QLineEdit,
                             QGroupBox, QListWidget, QListWidgetItem, QStackedLayout,
                             QComboBox)
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer, QByteArray
 from PyQt6.QtGui import QPixmap, QImage, QColor, QPainter
 from PIL import Image
 import math
 from io import BytesIO
+import base64
 
 class LoraManager(QMainWindow):
     def __init__(self):
@@ -97,7 +98,7 @@ class LoraManager(QMainWindow):
         # Zoom: tamaño de los thumbnails
         self.thumbnail_size = 250  # Tamaño inicial de los thumbnails
         
-        # Load saved paths
+        # Load saved paths (ANTES de crear widgets)
         self.settings_file = "lora_manager_settings.json"
         self.load_settings()
         
@@ -166,8 +167,6 @@ class LoraManager(QMainWindow):
         search_layout.addWidget(self.folder_combo)
         search_group.setLayout(search_layout)
         self.central_vbox.addWidget(search_group)
-        self.selected_lora_subfolder = ""  # Carpeta seleccionada en el combo
-        self.update_folder_combo()
         # Available LORAs section
         available_group = QGroupBox("Available LORAs")
         available_layout = QVBoxLayout()
@@ -188,10 +187,12 @@ class LoraManager(QMainWindow):
         selected_group = QGroupBox("Selected LORAs")
         selected_layout = QVBoxLayout()
         selected_scroll = QScrollArea()
-        selected_scroll.setWidgetResizable(True)
+        selected_scroll.setWidgetResizable(False)
+        selected_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.selected_widget = QWidget()
-        self.selected_layout = QGridLayout(self.selected_widget)
+        self.selected_layout = QHBoxLayout(self.selected_widget)
         self.selected_layout.setSpacing(20)
+        self.selected_widget.setMinimumHeight(self.thumbnail_size + 24)
         selected_scroll.setWidget(self.selected_widget)
         selected_layout.addWidget(selected_scroll)
         # Buttons for managing selected LORAs
@@ -210,8 +211,8 @@ class LoraManager(QMainWindow):
         self.main_hbox.addLayout(self.central_vbox)
         # Establecer el layout principal
         main_widget.setLayout(self.main_hbox)
-        # Sidebar visible por defecto
-        self.sidebar.setVisible(True)
+        # Sidebar: restaurar estado guardado
+        self.set_sidebar_visible(self.sidebar_visible)
         
         # Dictionary to store selected LORAs
         self.selected_applied_loras = set()
@@ -221,13 +222,25 @@ class LoraManager(QMainWindow):
         # Load LORAs and refresh selected list
         QTimer.singleShot(0, self.load_loras)
         QTimer.singleShot(0, self.refresh_selected_list)
+        
+        # --- Restaurar estado tras crear widgets y layouts ---
+        self.set_sidebar_visible(self.sidebar_visible)
+        self.update_folder_combo()
+        self.load_loras()
+        # Iniciar siempre maximizada
+        QTimer.singleShot(0, self.showMaximized)
     
     def refresh_selected_list(self):
         """Refresh the list of selected LORAs"""
         # Clear existing thumbnails
-        for i in reversed(range(self.selected_layout.count())): 
-            self.selected_layout.itemAt(i).widget().setParent(None)
+        while self.selected_layout.count():
+            item = self.selected_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
         if not os.path.exists(self.output_path):
+            self.selected_widget.setMinimumWidth(0)
+            self.selected_widget.setMinimumHeight(self.thumbnail_size + 24)
             return
         # Group files by LORA
         lora_files = {}
@@ -251,44 +264,37 @@ class LoraManager(QMainWindow):
                 lora_name = os.path.splitext(file)[0]
                 if lora_name in lora_files:
                     lora_files[lora_name]['config'] = file_path
-        # Add thumbnails for each LORA
-        row = 0
-        col = 0
-        container_width = self.selected_widget.width()
-        if container_width < self.thumbnail_size + 24:
-            parent = self.selected_widget.parent()
-            container_width = parent.width() if parent else self.width()
-        max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))
         self.selected_applied_loras.clear()  # Limpiar selección al refrescar panel de abajo
-        for lora_name, files in lora_files.items():
-            # Try to find preview image in the original directory
+        lora_items = list(lora_files.items())
+        for lora_name, files in lora_items:
             lora_dir = os.path.dirname(files['model'])
             preview_path = None
-            # First try with .preview extension
             preview_base = f"{lora_name}.preview"
             for ext in ['.png', '.jpg', '.jpeg']:
                 test_path = os.path.join(lora_dir, f"{preview_base}{ext}")
                 if os.path.exists(test_path):
                     preview_path = test_path
                     break
-            # If not found, try with just the LORA name
             if preview_path is None:
                 for ext in ['.png', '.jpg', '.jpeg']:
                     test_path = os.path.join(lora_dir, f"{lora_name}{ext}")
                     if os.path.exists(test_path):
                         preview_path = test_path
                         break
-            # If still not found, use default
             if preview_path is None:
                 preview_path = os.path.join(lora_dir, f"{lora_name}.preview.png")
                 if not os.path.exists(preview_path):
                     preview_path = os.path.join(lora_dir, "preview.png")
             thumbnail_widget = self.create_thumbnail_widget(files['model'], lora_name, preview_path, is_applied=True)
-            self.selected_layout.addWidget(thumbnail_widget, row, col)
-            col += 1
-            if col >= max_cols:
-                col = 0
-                row += 1
+            self.selected_layout.addWidget(thumbnail_widget)
+        # Ajustar el ancho mínimo del widget contenedor
+        num_loras = len(lora_items)
+        if num_loras > 0:
+            total_width = num_loras * (self.thumbnail_size + self.selected_layout.spacing())
+            self.selected_widget.setMinimumWidth(total_width)
+        else:
+            self.selected_widget.setMinimumWidth(0)
+        self.selected_widget.setMinimumHeight(self.thumbnail_size + 24)
         self.update_remove_all_btn_text()
     
     def update_remove_all_btn_text(self):
@@ -322,16 +328,22 @@ class LoraManager(QMainWindow):
                 self.lora_path = settings.get('lora_path', self.default_lora_path)
                 self.output_path = settings.get('output_path', self.default_output_path)
                 self.thumbnail_size = settings.get('thumbnail_size', 250)
+                self.sidebar_visible = settings.get('sidebar_visible', True)
+                self.selected_lora_subfolder = settings.get('selected_lora_subfolder', "")
         except FileNotFoundError:
             self.lora_path = self.default_lora_path
             self.output_path = self.default_output_path
             self.thumbnail_size = 250
+            self.sidebar_visible = True
+            self.selected_lora_subfolder = ""
     
     def save_settings(self):
         settings = {
             'lora_path': self.lora_path,
             'output_path': self.output_path,
-            'thumbnail_size': self.thumbnail_size
+            'thumbnail_size': self.thumbnail_size,
+            'sidebar_visible': self.sidebar_visible,
+            'selected_lora_subfolder': self.selected_lora_subfolder
         }
         with open(self.settings_file, 'w') as f:
             json.dump(settings, f)
@@ -404,7 +416,7 @@ class LoraManager(QMainWindow):
         
         # Add relative path
         rel_path = os.path.relpath(os.path.dirname(lora_path), self.lora_path)
-        if rel_path != ".":
+        if rel_path != "." and not is_applied:
             path_label = QLabel(rel_path)
             path_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             path_label.setStyleSheet("""
@@ -482,7 +494,7 @@ class LoraManager(QMainWindow):
             image_container.mousePressEvent = handle_click
             img_label.mousePressEvent = handle_click
             name_label.mousePressEvent = handle_click
-            if rel_path != ".":
+            if rel_path != "." and not is_applied:
                 path_label.mousePressEvent = handle_click
             update_selection(lora_path in self.selected_applied_loras)
         else:
@@ -522,7 +534,7 @@ class LoraManager(QMainWindow):
             image_container.mousePressEvent = handle_click
             img_label.mousePressEvent = handle_click
             name_label.mousePressEvent = handle_click
-            if rel_path != ".":
+            if rel_path != "." and not is_applied:
                 path_label.mousePressEvent = handle_click
             update_selection(lora_path in self.selected_applied_loras)
         
@@ -705,17 +717,29 @@ class LoraManager(QMainWindow):
         self.refresh_selected_list()
 
     def toggle_sidebar(self):
-        self.sidebar.setVisible(not self.sidebar.isVisible())
+        self.set_sidebar_visible(not self.sidebar_visible)
 
     def update_folder_combo(self):
         # Muestra subcarpetas de la carpeta seleccionada y opción de volver a la carpeta padre
         self.folder_combo.blockSignals(True)
         self.folder_combo.clear()
         # Calcular ruta absoluta de la carpeta actual
-        if hasattr(self, 'selected_lora_subfolder') and self.selected_lora_subfolder:
-            current_path = os.path.join(self.lora_path, self.selected_lora_subfolder)
-        else:
-            current_path = self.lora_path
+        # Fallback robusto: si la carpeta guardada no existe, sube hasta encontrar una válida
+        subfolder = getattr(self, 'selected_lora_subfolder', "")
+        while True:
+            if subfolder:
+                current_path = os.path.join(self.lora_path, subfolder)
+            else:
+                current_path = self.lora_path
+            if os.path.isdir(current_path):
+                break
+            if not subfolder:
+                break
+            # Subir a la carpeta padre
+            subfolder = os.path.dirname(subfolder)
+            if subfolder == ".":
+                subfolder = ""
+        self.selected_lora_subfolder = subfolder
         # Breadcrumb
         rel_current = os.path.relpath(current_path, self.lora_path)
         if rel_current == ".":
@@ -729,8 +753,21 @@ class LoraManager(QMainWindow):
             full_path = os.path.join(current_path, entry)
             if os.path.isdir(full_path) and os.listdir(full_path):
                 self.folder_combo.addItem(entry, os.path.relpath(full_path, self.lora_path))
-        self.folder_combo.setCurrentIndex(-1)
+        # Selecciona la opción correspondiente a la carpeta guardada
+        if rel_current == ".":
+            self.folder_combo.setCurrentIndex(-1)
+        else:
+            found = False
+            for i in range(self.folder_combo.count()):
+                if self.folder_combo.itemData(i) == rel_current:
+                    self.folder_combo.setCurrentIndex(i)
+                    found = True
+                    break
+            if not found:
+                self.folder_combo.setCurrentIndex(-1)
         self.folder_combo.blockSignals(False)
+        # Asegura que el sidebar esté en el estado guardado
+        self.set_sidebar_visible(self.sidebar_visible)
 
     def on_folder_combo_changed(self, idx):
         data = self.folder_combo.currentData()
@@ -744,8 +781,19 @@ class LoraManager(QMainWindow):
                     self.selected_lora_subfolder = parent
         elif data:
             self.selected_lora_subfolder = data
+        self.save_settings()
         self.update_folder_combo()
         self.load_loras()
+
+    def closeEvent(self, event):
+        self.set_sidebar_visible(self.sidebar.isVisible())
+        self.save_settings()
+        super().closeEvent(event)
+
+    def set_sidebar_visible(self, visible):
+        self.sidebar_visible = visible
+        self.sidebar.setVisible(visible)
+        self.save_settings()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
