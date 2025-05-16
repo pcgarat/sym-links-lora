@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QScrollArea, QGridLayout, QCheckBox, QLineEdit,
                             QGroupBox, QListWidget, QListWidgetItem, QStackedLayout,
                             QComboBox, QTextEdit, QDialog, QProgressBar, QFormLayout,
-                            QTableWidget, QTableWidgetItem)
+                            QTableWidget, QTableWidgetItem, QMessageBox)
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer, QByteArray, QThread, pyqtSlot, QObject
 from PyQt6.QtGui import QPixmap, QImage, QColor, QPainter
 from PIL import Image
@@ -17,6 +17,7 @@ from io import BytesIO
 import base64
 from civitai import CivitaiAPI
 import requests
+import glob
 
 class LogDialog(QDialog):
     def __init__(self, parent=None):
@@ -332,6 +333,10 @@ class LoraManager(QMainWindow):
         self.civitai_update_btn = QPushButton("Actualizar metadatos desde Civitai")
         self.civitai_update_btn.clicked.connect(self.on_civitai_update_clicked)
         self.sidebar_layout.addWidget(self.civitai_update_btn)
+        # --- NUEVO: Botón para actualizar filtro modelos base ---
+        self.update_base_models_btn = QPushButton("Actualizar filtro modelos base")
+        self.update_base_models_btn.clicked.connect(self.on_update_base_models_clicked)
+        self.sidebar_layout.addWidget(self.update_base_models_btn)
         # Barra de progreso para actualización Civitai
         self.civitai_progress = QProgressBar()
         self.civitai_progress.setMinimum(0)
@@ -375,13 +380,23 @@ class LoraManager(QMainWindow):
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search by name or path...")
         self.search_box.textChanged.connect(self.filter_loras)
+        # --- NUEVO: Filtro Model ---
+        self.model_filter_label = QLabel("Model:")
+        self.model_filter_combo = QComboBox()
+        self.model_filter_combo.setMinimumWidth(120)
+        self.model_filter_combo.addItem("(All)")
+        self.model_filter_combo.currentIndexChanged.connect(self.filter_loras)
+        self.load_model_filter_options()
         # Combo para subcarpetas y breadcrumb
         self.folder_breadcrumb = QLabel("")
         self.folder_combo = QComboBox()
         self.folder_combo.setMinimumWidth(120)
         self.folder_combo.currentIndexChanged.connect(self.on_folder_combo_changed)
+        # Añadir widgets al layout en el orden pedido
         search_layout.addWidget(self.search_label)
         search_layout.addWidget(self.search_box)
+        search_layout.addWidget(self.model_filter_label)
+        search_layout.addWidget(self.model_filter_combo)
         search_layout.addWidget(self.folder_breadcrumb)
         search_layout.addWidget(self.folder_combo)
         search_group.setLayout(search_layout)
@@ -800,6 +815,7 @@ class LoraManager(QMainWindow):
         for i in reversed(range(self.thumbnail_layout.count())): 
             self.thumbnail_layout.itemAt(i).widget().setParent(None)
         self.all_thumbnail_widgets.clear()
+        self.lora_base_model_map = {}
         
         # Create output directory if it doesn't exist
         os.makedirs(self.output_path, exist_ok=True)
@@ -846,13 +862,20 @@ class LoraManager(QMainWindow):
                         preview_path = os.path.join(root, f"{lora_name}.preview.png")
                         if not os.path.exists(preview_path):
                             preview_path = os.path.join(root, "preview.png")
-                    # Create thumbnail widget
-                    thumbnail_widget = self.create_thumbnail_widget(lora_path, lora_name, preview_path)
-                    # Store widget with searchable text
+                    # --- NUEVO: Leer baseModel del JSON asociado ---
+                    base_model_val = None
+                    if config_path and config_path.lower().endswith('.json'):
+                        try:
+                            with open(config_path, 'r', encoding='utf-8') as jf:
+                                jdata = json.load(jf)
+                                base_model_val = jdata.get('baseModel')
+                        except Exception:
+                            pass
                     search_text = f"{lora_name} {os.path.relpath(root, self.lora_path)}"
-                    self.all_thumbnail_widgets[search_text.lower()] = thumbnail_widget
+                    self.all_thumbnail_widgets[search_text.lower()] = self.create_thumbnail_widget(lora_path, lora_name, preview_path)
+                    self.lora_base_model_map[search_text.lower()] = base_model_val
                     # Add to layout
-                    self.thumbnail_layout.addWidget(thumbnail_widget, row, col)
+                    self.thumbnail_layout.addWidget(self.all_thumbnail_widgets[search_text.lower()], row, col)
                     col += 1
                     if col >= max_cols:
                         col = 0
@@ -862,10 +885,12 @@ class LoraManager(QMainWindow):
         # Clear existing thumbnails
         for i in reversed(range(self.thumbnail_layout.count())): 
             self.thumbnail_layout.itemAt(i).widget().setParent(None)
-        
         # Get search text
         search_text = self.search_box.text().lower()
-        
+        # Get model filter
+        selected_model = self.model_filter_combo.currentText()
+        if selected_model == "(All)":
+            selected_model = None
         # Filter and display thumbnails
         row = 0
         col = 0
@@ -873,15 +898,31 @@ class LoraManager(QMainWindow):
         self.thumbnail_widget.setFixedWidth(container_width)
         spacing = self.thumbnail_layout.spacing()
         max_cols = max(1, int((container_width + spacing) // (self.thumbnail_size + spacing)))
-        
         for search_key, widget in self.all_thumbnail_widgets.items():
-            if search_text in search_key:
+            # --- NUEVO: Filtrado por modelo base ---
+            passes_model = True
+            if selected_model:
+                # Obtener el path del LORA desde el widget
+                lora_path = None
+                # Buscar QLabel con el path en el widget
+                for child in widget.findChildren(QLabel):
+                    if child.text() == search_key.split()[0]:
+                        lora_path = child.text()
+                        break
+                # Alternativamente, obtener el path del widget si está guardado
+                # Pero mejor: usar el path del archivo desde el search_key
+                # Extraer el path real del archivo .safetensors
+                # El search_key es 'lora_name rel_path', pero el path real está en el dict
+                # Así que mejor guardar self.lora_base_model_map en load_loras
+                lora_base_model = self.lora_base_model_map.get(search_key)
+                passes_model = (lora_base_model == selected_model)
+            if search_text in search_key and passes_model:
                 self.thumbnail_layout.addWidget(widget, row, col)
                 col += 1
                 if col >= max_cols:
                     col = 0
                     row += 1
-    
+
     def apply_selection(self):
         # Create symbolic links for selected LORAs
         for lora_path in self.selected_applied_loras:
@@ -1137,6 +1178,43 @@ class LoraManager(QMainWindow):
     def _on_civitai_json_updated(self):
         self.civitai_count_json += 1
         self.civitai_summary_label_json.setText(str(self.civitai_count_json))
+
+    def on_update_base_models_clicked(self):
+        try:
+            files = glob.glob('/mnt/SharedExt/loras/Lora/**/*.json', recursive=True) + glob.glob('/mnt/SharedExt/loras/Lora/*.json')
+            s = set()
+            for f in files:
+                try:
+                    with open(f, 'r', encoding='utf-8') as jf:
+                        data = json.load(jf)
+                        val = data.get('baseModel')
+                        if val:
+                            s.add(val)
+                except Exception:
+                    continue
+            out_path = '/mnt/SharedExt/loras/base_models.json'
+            with open(out_path, 'w', encoding='utf-8') as outf:
+                json.dump(sorted(s), outf, ensure_ascii=False, indent=2)
+            QMessageBox.information(self, "Filtro actualizado", f"Se han guardado {len(s)} modelos base únicos en base_models.json")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error actualizando base_models.json:\n{e}\n{traceback.format_exc()}")
+
+    def load_model_filter_options(self):
+        import os
+        self.model_filter_combo.blockSignals(True)
+        self.model_filter_combo.clear()
+        self.model_filter_combo.addItem("(All)")
+        try:
+            path = '/mnt/SharedExt/loras/base_models.json'
+            if os.path.exists(path):
+                import json
+                with open(path, 'r', encoding='utf-8') as f:
+                    models = json.load(f)
+                for m in models:
+                    self.model_filter_combo.addItem(str(m))
+        except Exception as e:
+            print(f"Error loading base_models.json: {e}")
+        self.model_filter_combo.blockSignals(False)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
