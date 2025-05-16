@@ -148,7 +148,7 @@ class LoraManager(QMainWindow):
         self.central_vbox.setSpacing(15)
         self.central_vbox.setContentsMargins(20, 20, 20, 20)
         # Search box
-        search_group = QGroupBox("Search")
+        search_group = QGroupBox("")
         search_layout = QHBoxLayout()
         self.search_label = QLabel("Search:")
         self.search_box = QLineEdit()
