@@ -7,7 +7,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                             QScrollArea, QGridLayout, QCheckBox, QLineEdit,
                             QGroupBox, QListWidget, QListWidgetItem, QStackedLayout,
-                            QComboBox, QTextEdit, QDialog, QProgressBar, QFormLayout)
+                            QComboBox, QTextEdit, QDialog, QProgressBar, QFormLayout,
+                            QTableWidget, QTableWidgetItem)
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer, QByteArray, QThread, pyqtSlot, QObject
 from PyQt6.QtGui import QPixmap, QImage, QColor, QPainter
 from PIL import Image
@@ -113,8 +114,18 @@ class LoraInfoDialog(QDialog):
         base_model = data.get('baseModel', '')
         model = data.get('model') or {}
         model_nsfw = model.get('nsfw', '')
+        model_type = model.get('type', '')
         vbox.addWidget(QLabel(f"<b>baseModel:</b> {base_model}"))
         vbox.addWidget(QLabel(f"<b>model.nsfw:</b> {model_nsfw}"))
+        # Mostrar trainedWords si no es Checkpoint
+        if model_type != 'Checkpoint':
+            trained_words = data.get('trainedWords')
+            if trained_words:
+                if isinstance(trained_words, list):
+                    trained_words_str = ', '.join(str(w) for w in trained_words)
+                else:
+                    trained_words_str = str(trained_words)
+                vbox.addWidget(QLabel(f"<b>trainedWords:</b> {trained_words_str}"))
         # Imágenes
         images = data.get('images') or []
         for idx, img in enumerate(images):
@@ -171,6 +182,15 @@ class LoraInfoDialog(QDialog):
             if extra_fields:
                 for field in extra_fields:
                     meta_layout.addRow(f"{field}:", QLabel(str(meta.get(field, ''))))
+            # Mostrar resources si no es Checkpoint
+            if model_type != 'Checkpoint':
+                resources = meta.get('resources', [])
+                if isinstance(resources, list) and resources:
+                    meta_layout.addRow(QLabel('<b>Resources:</b>'))
+                    for res in resources:
+                        name = str(res.get('name', ''))
+                        weight = str(res.get('weight', ''))
+                        meta_layout.addRow(QLabel(f'Resource: {name} (weight: {weight})'))
             meta_widget = QWidget()
             meta_widget.setLayout(meta_layout)
             group_layout.addWidget(meta_widget)
