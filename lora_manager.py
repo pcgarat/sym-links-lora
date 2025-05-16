@@ -173,6 +173,7 @@ class LoraManager(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.thumbnail_scroll = scroll
         self.thumbnail_widget = QWidget()
         self.thumbnail_layout = QGridLayout(self.thumbnail_widget)
         self.thumbnail_layout.setSpacing(20)
@@ -553,11 +554,10 @@ class LoraManager(QMainWindow):
         # Walk through la carpeta seleccionada
         row = 0
         col = 0
-        container_width = self.thumbnail_widget.width()
-        if container_width < self.thumbnail_size + 24:
-            parent = self.thumbnail_widget.parent()
-            container_width = parent.width() if parent else self.width()
-        max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))
+        container_width = self.thumbnail_scroll.viewport().width()
+        self.thumbnail_widget.setFixedWidth(container_width)
+        spacing = self.thumbnail_layout.spacing()
+        max_cols = max(1, int((container_width + spacing) // (self.thumbnail_size + spacing)))
         # Determinar carpeta a mostrar
         if self.selected_lora_subfolder:
             target_dir = os.path.join(self.lora_path, self.selected_lora_subfolder)
@@ -616,11 +616,10 @@ class LoraManager(QMainWindow):
         # Filter and display thumbnails
         row = 0
         col = 0
-        container_width = self.thumbnail_widget.width()
-        if container_width < self.thumbnail_size + 24:
-            parent = self.thumbnail_widget.parent()
-            container_width = parent.width() if parent else self.width()
-        max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))
+        container_width = self.thumbnail_scroll.viewport().width()
+        self.thumbnail_widget.setFixedWidth(container_width)
+        spacing = self.thumbnail_layout.spacing()
+        max_cols = max(1, int((container_width + spacing) // (self.thumbnail_size + spacing)))
         
         for search_key, widget in self.all_thumbnail_widgets.items():
             if search_text in search_key:
@@ -714,11 +713,12 @@ class LoraManager(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.load_loras()
-        self.refresh_selected_list()
+        QTimer.singleShot(0, self.load_loras)
+        QTimer.singleShot(0, self.refresh_selected_list)
 
     def toggle_sidebar(self):
         self.set_sidebar_visible(not self.sidebar_visible)
+        QTimer.singleShot(0, self.load_loras)
 
     def update_folder_combo(self):
         # Muestra subcarpetas de la carpeta seleccionada y opción de volver a la carpeta padre
