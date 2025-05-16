@@ -15,6 +15,7 @@ import math
 from io import BytesIO
 import base64
 from civitai import CivitaiAPI
+import requests
 
 class LogDialog(QDialog):
     def __init__(self, parent=None):
@@ -93,6 +94,95 @@ class CivitaiWorker(QObject):
             self.finished.emit(ok, fail)
         except Exception as e:
             self.error.emit(str(e))
+
+class LoraInfoDialog(QDialog):
+    def __init__(self, json_path, parent=None, extra_fields=None):
+        super().__init__(parent)
+        self.setWindowTitle("Información del LORA")
+        self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+        self.setMinimumSize(900, 700)
+        layout = QVBoxLayout()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        vbox = QVBoxLayout(content)
+        # Leer JSON
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # Campos principales
+        base_model = data.get('baseModel', '')
+        model = data.get('model') or {}
+        model_nsfw = model.get('nsfw', '')
+        vbox.addWidget(QLabel(f"<b>baseModel:</b> {base_model}"))
+        vbox.addWidget(QLabel(f"<b>model.nsfw:</b> {model_nsfw}"))
+        # Imágenes
+        images = data.get('images') or []
+        for idx, img in enumerate(images):
+            group = QGroupBox()
+            group_layout = QHBoxLayout()
+            # Miniatura
+            img_url = img.get('url', '')
+            local_img = None
+            base = os.path.splitext(json_path)[0]
+            possible_exts = ['.png', '.jpg', '.jpeg', '.webp']
+            preview_path = None
+            for ext in possible_exts:
+                if idx == 0:
+                    candidate = base + f".preview{ext}"
+                else:
+                    candidate = base + f".{idx}.preview{ext}"
+                if os.path.exists(candidate):
+                    preview_path = candidate
+                    break
+            if preview_path:
+                local_img = preview_path
+            pix = None
+            if local_img and os.path.exists(local_img):
+                pix = QPixmap(local_img)
+            elif img_url:
+                try:
+                    resp = requests.get(img_url, timeout=5)
+                    if resp.status_code == 200:
+                        img_data = resp.content
+                        pix = QPixmap()
+                        pix.loadFromData(img_data)
+                except Exception:
+                    pix = None
+            if pix:
+                if pix.width() > 256 or pix.height() > 256:
+                    pix = pix.scaled(256, 256, aspectRatioMode=Qt.AspectRatioMode.KeepAspectRatio, transformMode=Qt.TransformationMode.SmoothTransformation)
+                img_label = QLabel()
+                img_label.setPixmap(pix)
+                img_label.setFixedSize(pix.width(), pix.height())
+                group_layout.addWidget(img_label)
+            # Metadatos
+            meta = img.get('meta') or {}
+            meta_layout = QFormLayout()
+            def meta_val(key):
+                return str(meta.get(key, ''))
+            meta_layout.addRow("sampler:", QLabel(meta_val('sampler')))
+            meta_layout.addRow("cfgScale:", QLabel(meta_val('cfgScale')))
+            meta_layout.addRow("Schedule type:", QLabel(meta_val('Schedule type')))
+            meta_layout.addRow("Distilled CFG Scale:", QLabel(meta_val('Distilled CFG Scale')))
+            meta_layout.addRow("Diffusion in Low Bits:", QLabel(meta_val('Diffusion in Low Bits')))
+            meta_layout.addRow("seed:", QLabel(str(meta.get('seed', img.get('seed', '')))))
+            meta_layout.addRow("Size:", QLabel(str(meta.get('Size', img.get('size', '')))))
+            # --- NUEVO: mostrar campos extra si extra_fields está definido ---
+            if extra_fields:
+                for field in extra_fields:
+                    meta_layout.addRow(f"{field}:", QLabel(str(meta.get(field, ''))))
+            meta_widget = QWidget()
+            meta_widget.setLayout(meta_layout)
+            group_layout.addWidget(meta_widget)
+            group.setLayout(group_layout)
+            vbox.addWidget(group)
+        content.setLayout(vbox)
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+        close_btn = QPushButton("Cerrar")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+        self.setLayout(layout)
 
 class LoraManager(QMainWindow):
     def __init__(self):
@@ -517,7 +607,6 @@ class LoraManager(QMainWindow):
         # Create name label
         name_label = QLabel(preview_name)
         name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # --- NUEVO: Azul si existe JSON ---
         lora_json = os.path.splitext(lora_path)[0] + ".json"
         if os.path.exists(lora_json):
             name_label.setStyleSheet("""
@@ -542,6 +631,7 @@ class LoraManager(QMainWindow):
         
         # Add relative path
         rel_path = os.path.relpath(os.path.dirname(lora_path), self.lora_path)
+        path_label = None
         if rel_path != "." and not is_applied:
             path_label = QLabel(rel_path)
             path_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -584,7 +674,7 @@ class LoraManager(QMainWindow):
         thumbnail_layout.addWidget(image_container)
         
         if not is_applied:
-            # Selección por click en el título, imagen o contenedor
+            # Selección por click en el contenedor o imagen, info solo en el título
             def update_selection(selected):
                 if selected:
                     image_container.setStyleSheet("""
@@ -608,7 +698,7 @@ class LoraManager(QMainWindow):
                             background-color: #353535;
                         }
                     """)
-            def handle_click(event):
+            def handle_select(event):
                 current_state = lora_path in self.selected_applied_loras
                 new_state = not current_state
                 if new_state:
@@ -617,14 +707,33 @@ class LoraManager(QMainWindow):
                     self.selected_applied_loras.discard(lora_path)
                 update_selection(new_state)
                 self.update_remove_all_btn_text()
-            image_container.mousePressEvent = handle_click
-            img_label.mousePressEvent = handle_click
-            name_label.mousePressEvent = handle_click
-            if rel_path != "." and not is_applied:
-                path_label.mousePressEvent = handle_click
+            def handle_info(event):
+                if os.path.exists(lora_json):
+                    try:
+                        with open(lora_json, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        model_type = data.get('model', {}).get('type', '')
+                        if model_type == 'Checkpoint':
+                            dlg = LoraInfoDialog(lora_json, self)
+                            dlg.exec()
+                        else:
+                            extra_fields = [
+                                'prompt', 'steps', 'negativePrompt',
+                                'Style Selector Style', 'Style Selector Enabled'
+                            ]
+                            dlg = LoraInfoDialog(lora_json, self, extra_fields=extra_fields)
+                            dlg.exec()
+                    except Exception as e:
+                        print(f"Error abriendo info LORA: {e}")
+            # Asignar eventos
+            image_container.mousePressEvent = handle_select
+            img_label.mousePressEvent = handle_select
+            name_label.mousePressEvent = handle_info
+            if path_label is not None:
+                path_label.mousePressEvent = handle_select
             update_selection(lora_path in self.selected_applied_loras)
         else:
-            # Panel de abajo: selección múltiple por click, sin botón X
+            # Panel de abajo: selección múltiple por click, sin botón X ni info
             def update_selection(selected):
                 if selected:
                     image_container.setStyleSheet("""
@@ -648,7 +757,7 @@ class LoraManager(QMainWindow):
                             background-color: #353535;
                         }
                     """)
-            def handle_click(event):
+            def handle_select(event):
                 current_state = lora_path in self.selected_applied_loras
                 new_state = not current_state
                 if new_state:
@@ -657,11 +766,11 @@ class LoraManager(QMainWindow):
                     self.selected_applied_loras.discard(lora_path)
                 update_selection(new_state)
                 self.update_remove_all_btn_text()
-            image_container.mousePressEvent = handle_click
-            img_label.mousePressEvent = handle_click
-            name_label.mousePressEvent = handle_click
-            if rel_path != "." and not is_applied:
-                path_label.mousePressEvent = handle_click
+            image_container.mousePressEvent = handle_select
+            img_label.mousePressEvent = handle_select
+            name_label.mousePressEvent = handle_select
+            if path_label is not None:
+                path_label.mousePressEvent = handle_select
             update_selection(lora_path in self.selected_applied_loras)
         
         return thumbnail_widget
@@ -939,8 +1048,8 @@ class LoraManager(QMainWindow):
         # Resetear contadores
         self.civitai_summary_label_previews.setText("0")
         self.civitai_summary_label_json.setText("0")
-        self._civitai_count_previews = 0
-        self._civitai_count_json = 0
+        self.civitai_count_previews = 0
+        self.civitai_count_json = 0
         # Crear y mostrar ventana de log
         self.log_dialog = LogDialog(self)
         self.log_dialog.append_log("Iniciando actualización de metadatos desde Civitai...")
@@ -1002,12 +1111,12 @@ class LoraManager(QMainWindow):
         self.civitai_progress.setFormat(f"{percent}%")
 
     def _on_civitai_preview_downloaded(self):
-        self._civitai_count_previews += 1
-        self.civitai_summary_label_previews.setText(str(self._civitai_count_previews))
+        self.civitai_count_previews += 1
+        self.civitai_summary_label_previews.setText(str(self.civitai_count_previews))
 
     def _on_civitai_json_updated(self):
-        self._civitai_count_json += 1
-        self.civitai_summary_label_json.setText(str(self._civitai_count_json))
+        self.civitai_count_json += 1
+        self.civitai_summary_label_json.setText(str(self.civitai_count_json))
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

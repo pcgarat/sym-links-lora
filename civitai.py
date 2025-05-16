@@ -92,6 +92,19 @@ class CivitaiAPI:
                         self._download_file(file_url, dest_path)
                         if self._preview_callback and ext in [".png", ".jpg", ".jpeg", ".webp"]:
                             self._preview_callback()
+        # Descargar SIEMPRE la primera imagen del array images como .preview.ext_img
+        if safetensor_path and model_info.get("images"):
+            first_img = model_info["images"][0]
+            img_url = first_img.get("url")
+            if img_url:
+                ext_img = os.path.splitext(img_url)[1]
+                preview_path = os.path.splitext(safetensor_path)[0] + f".preview{ext_img}"
+                if not os.path.exists(preview_path):
+                    if self.log_func:
+                        self.log_func(f"Descargando primer preview principal: {os.path.basename(preview_path)} → {preview_path}")
+                    self._download_file(img_url, preview_path)
+                    if self._preview_callback:
+                        self._preview_callback()
         # Descargar imágenes de preview y renombrarlas
         # Si hay un safetensor o gguf, usar ese nombre base
         base_preview = None
@@ -103,11 +116,16 @@ class CivitaiAPI:
                 if f.lower().endswith('.gguf'):
                     base_preview = os.path.splitext(os.path.join(dest_folder, f))[0]
                     break
+        # --- Renombrado incremental para previews ---
+        preview_count = 0
         for img in model_info.get("images", []):
             img_url = img.get("url")
             if img_url and base_preview:
                 ext = os.path.splitext(img_url)[1]
-                preview_name = base_preview + f".preview{ext}"
+                if preview_count == 0:
+                    preview_name = base_preview + f".preview{ext}"
+                else:
+                    preview_name = base_preview + f".{preview_count}.preview{ext}"
                 dest_path = preview_name
                 need_download = True
                 if os.path.exists(dest_path):
@@ -118,6 +136,7 @@ class CivitaiAPI:
                     self._download_file(img_url, dest_path)
                     if self._preview_callback:
                         self._preview_callback()
+                preview_count += 1
         return True
 
     def _download_file(self, url, dest_path):
