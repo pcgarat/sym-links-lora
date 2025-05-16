@@ -6,7 +6,8 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                             QScrollArea, QGridLayout, QCheckBox, QLineEdit,
-                            QGroupBox, QListWidget, QListWidgetItem, QStackedLayout)
+                            QGroupBox, QListWidget, QListWidgetItem, QStackedLayout,
+                            QComboBox)
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QColor, QPainter
 from PIL import Image
@@ -154,10 +155,19 @@ class LoraManager(QMainWindow):
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search by name or path...")
         self.search_box.textChanged.connect(self.filter_loras)
+        # Combo para subcarpetas y breadcrumb
+        self.folder_breadcrumb = QLabel("")
+        self.folder_combo = QComboBox()
+        self.folder_combo.setMinimumWidth(120)
+        self.folder_combo.currentIndexChanged.connect(self.on_folder_combo_changed)
         search_layout.addWidget(self.search_label)
         search_layout.addWidget(self.search_box)
+        search_layout.addWidget(self.folder_breadcrumb)
+        search_layout.addWidget(self.folder_combo)
         search_group.setLayout(search_layout)
         self.central_vbox.addWidget(search_group)
+        self.selected_lora_subfolder = ""  # Carpeta seleccionada en el combo
+        self.update_folder_combo()
         # Available LORAs section
         available_group = QGroupBox("Available LORAs")
         available_layout = QVBoxLayout()
@@ -332,6 +342,7 @@ class LoraManager(QMainWindow):
             self.lora_path = new_path
             self.lora_path_label.setText(f"LORA Path: {self.lora_path}")
             self.save_settings()
+            self.update_folder_combo()
             self.load_loras()
     
     def change_output_path(self):
@@ -526,62 +537,56 @@ class LoraManager(QMainWindow):
         # Create output directory if it doesn't exist
         os.makedirs(self.output_path, exist_ok=True)
         
-        # Walk through the LORA directory
+        # Walk through la carpeta seleccionada
         row = 0
         col = 0
         container_width = self.thumbnail_widget.width()
         if container_width < self.thumbnail_size + 24:
             parent = self.thumbnail_widget.parent()
             container_width = parent.width() if parent else self.width()
-        max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))  # Solo columnas completas
-        
-        for root, dirs, files in os.walk(self.lora_path):
-            # Find all .safetensors files
+        max_cols = max(1, int(container_width // (self.thumbnail_size + 24)))
+        # Determinar carpeta a mostrar
+        if self.selected_lora_subfolder:
+            target_dir = os.path.join(self.lora_path, self.selected_lora_subfolder)
+        else:
+            target_dir = self.lora_path
+        for root, dirs, files in os.walk(target_dir):
             for file in files:
                 if file.lower().endswith('.safetensors'):
                     lora_path = os.path.join(root, file)
                     lora_name = os.path.splitext(file)[0]
-                    
                     # Find associated files
                     preview_path = None
                     config_path = None
-                    
                     # Look for preview image with .preview extension
                     preview_base = f"{lora_name}.preview"
                     for img_file in files:
                         if img_file.lower().startswith(preview_base.lower()) and img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
                             preview_path = os.path.join(root, img_file)
                             break
-                    
                     # If no .preview image found, try with just the LORA name
                     if preview_path is None:
                         for img_file in files:
                             if img_file.lower().startswith(lora_name.lower()) and img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
                                 preview_path = os.path.join(root, img_file)
                                 break
-                    
                     # Look for config file with same base name
                     for config_file in files:
                         config_base = os.path.splitext(config_file)[0]
                         if config_base == lora_name and config_file.lower().endswith(('.yaml', '.yml', '.json')):
                             config_path = os.path.join(root, config_file)
                             break
-                    
                     if preview_path is None:
-                        preview_path = os.path.join(root, f"{lora_name}.preview.png")  # Default preview name
+                        preview_path = os.path.join(root, f"{lora_name}.preview.png")
                         if not os.path.exists(preview_path):
-                            preview_path = os.path.join(root, "preview.png")  # Fallback preview name
-                    
+                            preview_path = os.path.join(root, "preview.png")
                     # Create thumbnail widget
                     thumbnail_widget = self.create_thumbnail_widget(lora_path, lora_name, preview_path)
-                    
                     # Store widget with searchable text
                     search_text = f"{lora_name} {os.path.relpath(root, self.lora_path)}"
                     self.all_thumbnail_widgets[search_text.lower()] = thumbnail_widget
-                    
                     # Add to layout
                     self.thumbnail_layout.addWidget(thumbnail_widget, row, col)
-                    
                     col += 1
                     if col >= max_cols:
                         col = 0
@@ -701,6 +706,46 @@ class LoraManager(QMainWindow):
 
     def toggle_sidebar(self):
         self.sidebar.setVisible(not self.sidebar.isVisible())
+
+    def update_folder_combo(self):
+        # Muestra subcarpetas de la carpeta seleccionada y opción de volver a la carpeta padre
+        self.folder_combo.blockSignals(True)
+        self.folder_combo.clear()
+        # Calcular ruta absoluta de la carpeta actual
+        if hasattr(self, 'selected_lora_subfolder') and self.selected_lora_subfolder:
+            current_path = os.path.join(self.lora_path, self.selected_lora_subfolder)
+        else:
+            current_path = self.lora_path
+        # Breadcrumb
+        rel_current = os.path.relpath(current_path, self.lora_path)
+        if rel_current == ".":
+            self.folder_breadcrumb.setText("(Root)")
+        else:
+            self.folder_breadcrumb.setText(rel_current)
+        # Opciones del combo: '.. (Parent)' y subcarpetas
+        if rel_current != ".":
+            self.folder_combo.addItem(".. (Parent)", "..")
+        for entry in sorted(os.listdir(current_path)):
+            full_path = os.path.join(current_path, entry)
+            if os.path.isdir(full_path) and os.listdir(full_path):
+                self.folder_combo.addItem(entry, os.path.relpath(full_path, self.lora_path))
+        self.folder_combo.setCurrentIndex(-1)
+        self.folder_combo.blockSignals(False)
+
+    def on_folder_combo_changed(self, idx):
+        data = self.folder_combo.currentData()
+        if data == "..":
+            # Subir a la carpeta padre
+            if self.selected_lora_subfolder:
+                parent = os.path.dirname(self.selected_lora_subfolder)
+                if parent == "":
+                    self.selected_lora_subfolder = ""
+                else:
+                    self.selected_lora_subfolder = parent
+        elif data:
+            self.selected_lora_subfolder = data
+        self.update_folder_combo()
+        self.load_loras()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
