@@ -1,5 +1,5 @@
 #!/bin/bash
-
+# api key civitai 8712abedc4865cd5b0061d13590c021f
 # Nombre del entorno virtual
 VENV_NAME="venv"
 

@@ -7,13 +7,92 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                             QScrollArea, QGridLayout, QCheckBox, QLineEdit,
                             QGroupBox, QListWidget, QListWidgetItem, QStackedLayout,
-                            QComboBox)
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer, QByteArray
+                            QComboBox, QTextEdit, QDialog, QProgressBar, QFormLayout)
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer, QByteArray, QThread, pyqtSlot, QObject
 from PyQt6.QtGui import QPixmap, QImage, QColor, QPainter
 from PIL import Image
 import math
 from io import BytesIO
 import base64
+from civitai import CivitaiAPI
+
+class LogDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Log de actualización Civitai")
+        self.setMinimumSize(600, 400)
+        self.text_edit = QTextEdit(self)
+        self.text_edit.setReadOnly(True)
+        self.close_btn = QPushButton("Cerrar")
+        self.close_btn.setEnabled(False)
+        self.close_btn.clicked.connect(self.accept)
+        layout = QVBoxLayout()
+        layout.addWidget(self.text_edit)
+        layout.addWidget(self.close_btn)
+        self.setLayout(layout)
+    def append_log(self, text):
+        print(text)  # También mostrar en consola
+        self.text_edit.append(text)
+        self.text_edit.ensureCursorVisible()
+    def enable_close(self, enable=True):
+        self.close_btn.setEnabled(enable)
+
+class CivitaiWorker(QObject):
+    log_signal = pyqtSignal(str)
+    finished = pyqtSignal(int, int)
+    error = pyqtSignal(str)
+    progress = pyqtSignal(int, int)  # current, total
+    preview_downloaded = pyqtSignal()
+    json_updated = pyqtSignal()
+    def __init__(self, api_key, lora_folder):
+        super().__init__()
+        self.api_key = api_key
+        self.lora_folder = lora_folder
+        self._abort = False
+    def abort(self):
+        self._abort = True
+    @pyqtSlot()
+    def run(self):
+        from civitai import CivitaiAPI
+        api = CivitaiAPI(api_key=self.api_key, log_func=self.log_signal.emit)
+        api.set_preview_callback(self.preview_downloaded.emit)
+        api.set_json_callback(self.json_updated.emit)
+        ok = 0
+        fail = 0
+        safetensors = []
+        for root, dirs, files in os.walk(self.lora_folder):
+            for file in files:
+                if file.lower().endswith('.safetensors'):
+                    safetensors.append((root, file))
+        total = len(safetensors)
+        processed = 0
+        try:
+            for root, file in safetensors:
+                if self._abort:
+                    self.log_signal.emit("Proceso abortado por el usuario.")
+                    break
+                safetensor_path = os.path.join(root, file)
+                self.log_signal.emit(f"Calculando hash para: {safetensor_path}")
+                try:
+                    file_hash = api.hash_file(safetensor_path)
+                    self.log_signal.emit(f"Hash: {file_hash}")
+                    model_info = api.get_model_info_by_hash(file_hash)
+                    if model_info:
+                        self.log_signal.emit(f"Encontrado en Civitai. Descargando archivos...")
+                        api.download_model_files(model_info, root, safetensor_path=safetensor_path)
+                        self.log_signal.emit(f"✔️ {file} actualizado.")
+                        ok += 1
+                    else:
+                        self.log_signal.emit(f"❌ {file} no encontrado en Civitai.")
+                        fail += 1
+                except Exception as e:
+                    self.log_signal.emit(f"❌ Error con {file}: {e}")
+                    fail += 1
+                processed += 1
+                self.progress.emit(processed, total)
+            self.finished.emit(ok, fail)
+        except Exception as e:
+            self.error.emit(str(e))
 
 class LoraManager(QMainWindow):
     def __init__(self):
@@ -131,6 +210,36 @@ class LoraManager(QMainWindow):
         self.sidebar_layout.addWidget(self.output_path_btn)
         self.sidebar_layout.addWidget(self.zoom_out_btn)
         self.sidebar_layout.addWidget(self.zoom_in_btn)
+        # --- NUEVO: API key y botón de actualización ---
+        self.civitai_api_key_label = QLabel("Civitai API Key:")
+        self.civitai_api_key_input = QLineEdit()
+        self.civitai_api_key_input.setPlaceholderText("Introduce tu API key de Civitai...")
+        self.civitai_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.civitai_api_key_input.setText(getattr(self, 'civitai_api_key', ''))
+        self.civitai_api_key_input.textChanged.connect(self.on_civitai_api_key_changed)
+        self.sidebar_layout.addWidget(self.civitai_api_key_label)
+        self.sidebar_layout.addWidget(self.civitai_api_key_input)
+        self.civitai_update_btn = QPushButton("Actualizar metadatos desde Civitai")
+        self.civitai_update_btn.clicked.connect(self.on_civitai_update_clicked)
+        self.sidebar_layout.addWidget(self.civitai_update_btn)
+        # Barra de progreso para actualización Civitai
+        self.civitai_progress = QProgressBar()
+        self.civitai_progress.setMinimum(0)
+        self.civitai_progress.setMaximum(100)
+        self.civitai_progress.setValue(0)
+        self.civitai_progress.setTextVisible(True)
+        self.civitai_progress.setFormat("0%")
+        self.sidebar_layout.addWidget(self.civitai_progress)
+        # Panel de resumen de cambios
+        self.civitai_summary_group = QGroupBox("Cambios realizados")
+        self.civitai_summary_layout = QFormLayout()
+        self.civitai_summary_label_previews = QLabel("0")
+        self.civitai_summary_label_json = QLabel("0")
+        self.civitai_summary_layout.addRow("Previews descargados:", self.civitai_summary_label_previews)
+        self.civitai_summary_layout.addRow("JSON actualizados:", self.civitai_summary_label_json)
+        self.civitai_summary_group.setLayout(self.civitai_summary_layout)
+        self.sidebar_layout.addWidget(self.civitai_summary_group)
+        # --- FIN NUEVO ---
         self.sidebar_layout.addStretch(1)
         # Botón para mostrar/ocultar el sidebar
         self.toggle_sidebar_btn = QPushButton("☰")
@@ -332,12 +441,14 @@ class LoraManager(QMainWindow):
                 self.thumbnail_size = settings.get('thumbnail_size', 250)
                 self.sidebar_visible = settings.get('sidebar_visible', True)
                 self.selected_lora_subfolder = settings.get('selected_lora_subfolder', "")
+                self.civitai_api_key = settings.get('civitai_api_key', '')
         except FileNotFoundError:
             self.lora_path = self.default_lora_path
             self.output_path = self.default_output_path
             self.thumbnail_size = 250
             self.sidebar_visible = True
             self.selected_lora_subfolder = ""
+            self.civitai_api_key = ''
     
     def save_settings(self):
         settings = {
@@ -345,7 +456,8 @@ class LoraManager(QMainWindow):
             'output_path': self.output_path,
             'thumbnail_size': self.thumbnail_size,
             'sidebar_visible': self.sidebar_visible,
-            'selected_lora_subfolder': self.selected_lora_subfolder
+            'selected_lora_subfolder': self.selected_lora_subfolder,
+            'civitai_api_key': getattr(self, 'civitai_api_key', '')
         }
         with open(self.settings_file, 'w') as f:
             json.dump(settings, f)
@@ -795,6 +907,95 @@ class LoraManager(QMainWindow):
         self.sidebar_visible = visible
         self.sidebar.setVisible(visible)
         self.save_settings()
+
+    def on_civitai_api_key_changed(self, text):
+        self.civitai_api_key = text
+        self.save_settings()
+
+    def on_civitai_update_clicked(self):
+        api_key = getattr(self, 'civitai_api_key', '')
+        lora_folder = self.lora_path if not self.selected_lora_subfolder else os.path.join(self.lora_path, self.selected_lora_subfolder)
+        # Deshabilitar controles
+        self.civitai_update_btn.setText("Abortar")
+        self.civitai_update_btn.setStyleSheet("background-color: #b71c1c; color: white; font-weight: bold;")
+        self.civitai_update_btn.setEnabled(True)
+        self.civitai_update_btn.clicked.disconnect()
+        self.civitai_update_btn.clicked.connect(self.on_civitai_abort_clicked)
+        self.civitai_api_key_input.setEnabled(False)
+        self.civitai_progress.setValue(0)
+        self.civitai_progress.setFormat("0%")
+        # Resetear contadores
+        self.civitai_summary_label_previews.setText("0")
+        self.civitai_summary_label_json.setText("0")
+        self._civitai_count_previews = 0
+        self._civitai_count_json = 0
+        # Crear y mostrar ventana de log
+        self.log_dialog = LogDialog(self)
+        self.log_dialog.append_log("Iniciando actualización de metadatos desde Civitai...")
+        self.log_dialog.show()
+        # Lanzar worker en un hilo
+        self.worker_thread = QThread()
+        self.worker = CivitaiWorker(api_key, lora_folder)
+        self.worker.moveToThread(self.worker_thread)
+        self.worker.log_signal.connect(self.log_dialog.append_log)
+        self.worker.finished.connect(self._on_civitai_update_finished)
+        self.worker.error.connect(self._on_civitai_update_error)
+        self.worker.progress.connect(self._on_civitai_progress)
+        self.worker.preview_downloaded.connect(self._on_civitai_preview_downloaded)
+        self.worker.json_updated.connect(self._on_civitai_json_updated)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker_thread.start()
+
+    def on_civitai_abort_clicked(self):
+        if hasattr(self, 'worker') and self.worker:
+            self.worker.abort()
+        self.civitai_update_btn.setEnabled(False)
+
+    def _on_civitai_update_finished(self, ok, fail):
+        self.log_dialog.append_log(f"\nActualización completada. {ok} LORAs actualizados, {fail} sin coincidencia.")
+        self.log_dialog.enable_close(True)
+        self.civitai_update_btn.setText("Actualizar metadatos desde Civitai")
+        self.civitai_update_btn.setStyleSheet("")
+        self.civitai_update_btn.setEnabled(True)
+        self.civitai_update_btn.clicked.disconnect()
+        self.civitai_update_btn.clicked.connect(self.on_civitai_update_clicked)
+        self.civitai_api_key_input.setEnabled(True)
+        self.civitai_progress.setValue(100)
+        self.civitai_progress.setFormat("100%")
+        self.worker_thread.quit()
+        self.worker_thread.wait()
+        self.load_loras()
+        self.refresh_selected_list()
+
+    def _on_civitai_update_error(self, msg):
+        self.log_dialog.append_log(f"\nError: {msg}")
+        self.log_dialog.enable_close(True)
+        self.civitai_update_btn.setText("Actualizar metadatos desde Civitai")
+        self.civitai_update_btn.setStyleSheet("")
+        self.civitai_update_btn.setEnabled(True)
+        self.civitai_update_btn.clicked.disconnect()
+        self.civitai_update_btn.clicked.connect(self.on_civitai_update_clicked)
+        self.civitai_api_key_input.setEnabled(True)
+        self.civitai_progress.setValue(0)
+        self.civitai_progress.setFormat("0%")
+        self.worker_thread.quit()
+        self.worker_thread.wait()
+
+    def _on_civitai_progress(self, processed, total):
+        if total > 0:
+            percent = int(processed * 100 / total)
+        else:
+            percent = 100
+        self.civitai_progress.setValue(percent)
+        self.civitai_progress.setFormat(f"{percent}%")
+
+    def _on_civitai_preview_downloaded(self):
+        self._civitai_count_previews += 1
+        self.civitai_summary_label_previews.setText(str(self._civitai_count_previews))
+
+    def _on_civitai_json_updated(self):
+        self._civitai_count_json += 1
+        self.civitai_summary_label_json.setText(str(self._civitai_count_json))
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
