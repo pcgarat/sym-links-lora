@@ -18,6 +18,7 @@ import base64
 from civitai import CivitaiAPI
 import requests
 import glob
+import traceback
 
 class LogDialog(QDialog):
     def __init__(self, parent=None):
@@ -208,6 +209,7 @@ class LoraInfoDialog(QDialog):
 class LoraManager(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.base_models_path = "base_models.json"  # <--- Mueve aquí esta línea
         self.setWindowTitle("LORA Model Manager")
         self.setMinimumSize(1000, 800)  # Increased window size
         
@@ -567,6 +569,7 @@ class LoraManager(QMainWindow):
                 self.sidebar_visible = settings.get('sidebar_visible', True)
                 self.selected_lora_subfolder = settings.get('selected_lora_subfolder', "")
                 self.civitai_api_key = settings.get('civitai_api_key', '')
+                self.selected_model_filter = settings.get('selected_model_filter', "(All)")
         except FileNotFoundError:
             self.lora_path = self.default_lora_path
             self.output_path = self.default_output_path
@@ -574,6 +577,7 @@ class LoraManager(QMainWindow):
             self.sidebar_visible = True
             self.selected_lora_subfolder = ""
             self.civitai_api_key = ''
+            self.selected_model_filter = "(All)"
     
     def save_settings(self):
         settings = {
@@ -582,7 +586,8 @@ class LoraManager(QMainWindow):
             'thumbnail_size': self.thumbnail_size,
             'sidebar_visible': self.sidebar_visible,
             'selected_lora_subfolder': self.selected_lora_subfolder,
-            'civitai_api_key': getattr(self, 'civitai_api_key', '')
+            'civitai_api_key': getattr(self, 'civitai_api_key', ''),
+            'selected_model_filter': self.model_filter_combo.currentText()
         }
         with open(self.settings_file, 'w') as f:
             json.dump(settings, f)
@@ -882,6 +887,7 @@ class LoraManager(QMainWindow):
                         row += 1
     
     def filter_loras(self):
+        self.save_settings()  # Guardar el filtro cada vez que cambie
         # Clear existing thumbnails
         for i in reversed(range(self.thumbnail_layout.count())): 
             self.thumbnail_layout.itemAt(i).widget().setParent(None)
@@ -970,7 +976,6 @@ class LoraManager(QMainWindow):
                     shutil.copy2(file_path, target_path)
                     print(f"[DEBUG] Copied file: {file_path} -> {target_path}")
                 except Exception as e:
-                    import traceback
                     print(f"[DEBUG] Exception copying file for {file}: {e}")
                     traceback.print_exc()
         # Refresh the selected list
@@ -1181,7 +1186,7 @@ class LoraManager(QMainWindow):
 
     def on_update_base_models_clicked(self):
         try:
-            files = glob.glob('/mnt/SharedExt/loras/Lora/**/*.json', recursive=True) + glob.glob('/mnt/SharedExt/loras/Lora/*.json')
+            files = glob.glob(os.path.join(self.lora_path, '**/*.json'), recursive=True) + glob.glob(os.path.join(self.lora_path, '*.json'))
             s = set()
             for f in files:
                 try:
@@ -1192,7 +1197,8 @@ class LoraManager(QMainWindow):
                             s.add(val)
                 except Exception:
                     continue
-            out_path = '/mnt/SharedExt/loras/base_models.json'
+            out_path = self.base_models_path  # <--- USAR RUTA RELATIVA
+            # No hace falta crear el directorio, es el actual
             with open(out_path, 'w', encoding='utf-8') as outf:
                 json.dump(sorted(s), outf, ensure_ascii=False, indent=2)
             QMessageBox.information(self, "Filtro actualizado", f"Se han guardado {len(s)} modelos base únicos en base_models.json")
@@ -1200,18 +1206,21 @@ class LoraManager(QMainWindow):
             QMessageBox.critical(self, "Error", f"Error actualizando base_models.json:\n{e}\n{traceback.format_exc()}")
 
     def load_model_filter_options(self):
-        import os
         self.model_filter_combo.blockSignals(True)
         self.model_filter_combo.clear()
         self.model_filter_combo.addItem("(All)")
         try:
-            path = '/mnt/SharedExt/loras/base_models.json'
+            path = self.base_models_path  # <--- USAR RUTA RELATIVA
             if os.path.exists(path):
-                import json
                 with open(path, 'r', encoding='utf-8') as f:
                     models = json.load(f)
                 for m in models:
                     self.model_filter_combo.addItem(str(m))
+            # Restaurar el filtro guardado
+            saved_filter = getattr(self, 'selected_model_filter', "(All)")
+            index = self.model_filter_combo.findText(saved_filter)
+            if index >= 0:
+                self.model_filter_combo.setCurrentIndex(index)
         except Exception as e:
             print(f"Error loading base_models.json: {e}")
         self.model_filter_combo.blockSignals(False)
